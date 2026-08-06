@@ -194,7 +194,15 @@ def test_install_excepthook_replaces_sys_excepthook() -> None:
 
 def test_excepthook_skips_keyboard_interrupt() -> None:
     """KeyboardInterrupt must NOT trigger an event — that's deliberate user
-    action, not an error to report."""
+    action, not an error to report.
+
+    ``init()`` itself now auto-emits one unconditional ``session_opened``
+    baseline event (see ``monitor.init`` / ``_capture._emit_session_opened``),
+    so the mock DOES see one POST containing that event — the assertion below
+    checks no *additional* (KeyboardInterrupt-triggered) event rode along.
+    """
+    import json
+
     mock = _Mock()
     monitor.init(
         publishable_key="k",
@@ -210,7 +218,11 @@ def test_excepthook_skips_keyboard_interrupt() -> None:
         monitor.flush(timeout=0.5)
     finally:
         monitor.close()
-    assert mock.calls == []
+    assert len(mock.calls) == 1
+    body = json.loads(mock.calls[0].content)
+    events = body["events"] if isinstance(body, dict) else body
+    assert len(events) == 1
+    assert events[0]["featureName"] == "session_opened"
 
 
 def test_excepthook_captures_regular_exception() -> None:

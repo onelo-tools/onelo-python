@@ -222,6 +222,23 @@ def init(
     if install_excepthook:
         _excepthook.install()
 
+    # Unconditional baseline event — fixes the "auth-gated app emits ZERO
+    # monitor events on cold start" bug: every developer-instrumented
+    # track()/event() call can sit downstream of a gate that never fires
+    # before the first request, leaving the dashboard looking uninitialised
+    # even though instrumentation is correct. Mirrors the JS SDK's
+    # `session_opened` (packages/onelo-js/src/monitor/monitor.ts), emitted
+    # once construction/init completes and before any application code runs.
+    #
+    # Deliberately NOT re-emitted from `_after_fork_child` / reinit_after_fork:
+    # "session" here means the process's monitor.init() lifetime, not each
+    # transport thread. init() runs once in the parent (the common gunicorn/
+    # uwsgi preload pattern); a fork only rebuilds the dead transport thread
+    # inherited by the child, it isn't a second init(). Emitting again per
+    # forked worker would produce N duplicate session_opened rows per process
+    # tree instead of the one baseline signal this event exists to provide.
+    _capture._emit_session_opened()  # noqa: SLF001 — internal, same module family
+
 
 def close() -> None:
     """Tear down the monitor — drain buffer, stop transport, restore hooks.

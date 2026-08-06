@@ -245,6 +245,28 @@ def capture_message(
     _emit(event)
 
 
+def _emit_session_opened() -> None:
+    """Auto-emitted, unconditional baseline event — called once by
+    ``monitor.init`` right after the transport is wired up.
+
+    Guarantees the dashboard shows *something* even when every
+    developer-instrumented ``track()``/``event()`` call sits downstream of
+    an auth gate / feature flag that never fires on a cold start (the bug
+    this exists to fix). ``ok=True``, no error, no extra meta — mirrors the
+    JS SDK's ``session_opened`` (``monitor.ts``). Exempt from sampling (see
+    ``_emit``'s ``bypass_sampling``) since a randomly-dropped baseline event
+    would defeat its own purpose.
+    """
+    _emit(
+        MonitorEvent(
+            feature_name="session_opened",
+            ok=True,
+            source="event",
+        ),
+        bypass_sampling=True,
+    )
+
+
 def capture_event(event: MonitorEvent) -> None:
     """Low-level: hand a fully-built event to the pipeline.
 
@@ -428,8 +450,16 @@ def set_extra(key: str, value: Any) -> None:
 # ─── internals ──────────────────────────────────────────────────────────────
 
 
-def _emit(event: MonitorEvent) -> None:
-    """Run the full pipeline: scope merge → flag enrichment → PII scrub → transport."""
+def _emit(event: MonitorEvent, *, bypass_sampling: bool = False) -> None:
+    """Run the full pipeline: scope merge → flag enrichment → PII scrub → transport.
+
+    ``bypass_sampling`` skips ``_should_keep`` — used exactly once, by the
+    auto-emitted ``session_opened`` event (see ``monitor.init``). That event
+    exists specifically to guarantee a baseline signal reaches the dashboard
+    even when every developer-instrumented call sits behind an auth gate /
+    feature flag; letting ``success_sample_rate`` randomly drop it would
+    defeat its entire purpose.
+    """
     if _sink is None:
         # Capture API may be called before init (or after destroy). Drop
         # silently — surfacing an error here would be hostile to user code.
@@ -438,7 +468,7 @@ def _emit(event: MonitorEvent) -> None:
     # Client-side sampling — decided BEFORE scope merge / scrub / transport so a
     # dropped event costs almost nothing. Keeps an error storm from thrashing
     # the buffer and tripping the backend hourly quota.
-    if not _should_keep(event):
+    if not bypass_sampling and not _should_keep(event):
         return
 
     apply_scopes_to_event(event)
