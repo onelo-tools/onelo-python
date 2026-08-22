@@ -70,7 +70,7 @@ def init(
     *,
     onelo: "Onelo | None" = None,
     publishable_key: str | None = None,
-    api_url: str = "https://app.onelo.tools",
+    api_url: str | None = None,
     release: str | None = None,
     environment: str | None = None,
     server_name: str | None = None,
@@ -98,7 +98,10 @@ def init(
         ``onelo_pk_test_…`` / ``onelo_sk_live_…`` (secret keys are accepted
         for server-side use).
     api_url:
-        Base URL of the Onelo backend.
+        Base URL of the Onelo backend — ``https://api.onelo.tools`` in
+        production. Required when ``publishable_key`` is used; there is no
+        default because the host differs per environment. Ignored (and taken
+        from the client) when ``onelo`` is passed.
     release:
         Build identifier — typically ``$GIT_COMMIT_SHA`` or
         ``$VERCEL_GIT_COMMIT_SHA``. Falls back to env ``ONELO_RELEASE``.
@@ -150,6 +153,17 @@ def init(
             raise ValueError(
                 "monitor.init() requires `publishable_key` (or pass an existing "
                 "`onelo=Onelo(...)` instance)."
+            )
+        # No default api_url on purpose — see the same note in Onelo.__init__.
+        # The host differs per environment, so a hardcoded fallback is wrong
+        # somewhere and fails as a confusing network error rather than a clear
+        # config error.
+        if not api_url:
+            raise ValueError(
+                "monitor.init() requires `api_url` when called with "
+                "`publishable_key` — e.g. api_url='https://api.onelo.tools' "
+                "(or pass an existing `onelo=Onelo(...)` instance, which "
+                "carries it)."
             )
         resolved_key = publishable_key
         resolved_url = api_url

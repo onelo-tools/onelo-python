@@ -51,6 +51,7 @@ def test_email_strict_mode_via_init() -> None:
     """Wiring through ``monitor.init(strict_email_scrub=True)``."""
     monitor.init(
         publishable_key="onelo_pk_test_x",
+        api_url="https://api.example.com",
         install_excepthook=False,
         strict_email_scrub=True,
         http_transport=httpx.MockTransport(lambda _: httpx.Response(204)),
@@ -65,6 +66,7 @@ def test_email_strict_mode_via_init() -> None:
 def test_close_resets_strict_email_scrub() -> None:
     monitor.init(
         publishable_key="onelo_pk_test_x",
+        api_url="https://api.example.com",
         install_excepthook=False,
         strict_email_scrub=True,
         http_transport=httpx.MockTransport(lambda _: httpx.Response(204)),

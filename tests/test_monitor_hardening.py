@@ -242,6 +242,7 @@ def test_init_sets_per_process_session_id_on_events() -> None:
 def test_close_clears_session_id() -> None:
     monitor.init(
         publishable_key="onelo_pk_test_x",
+        api_url="https://api.example.com",
         install_excepthook=False,
         http_transport=httpx.MockTransport(lambda _: httpx.Response(204)),
     )

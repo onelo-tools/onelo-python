@@ -43,7 +43,7 @@ litestar = [
 # asgi/wsgi middleware: no extras needed (pure stdlib + httpx which is hard dep)
 
 [project.urls]
-Homepage = "https://app.onelo.tools"
+Homepage = "https://onelo.tools"
 Source = "https://github.com/onelo-tools/onelo-python"
 
 [tool.hatch.version]

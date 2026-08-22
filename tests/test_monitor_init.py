@@ -99,6 +99,7 @@ def test_double_init_replaces_previous_transport() -> None:
     mock1 = _Mock()
     monitor.init(
         publishable_key="k1",
+        api_url="https://api.example.com",
         install_excepthook=False,
         http_transport=_httpx_transport(mock1),
     )
@@ -108,6 +109,7 @@ def test_double_init_replaces_previous_transport() -> None:
     mock2 = _Mock()
     monitor.init(
         publishable_key="k2",
+        api_url="https://api.example.com",
         install_excepthook=False,
         http_transport=_httpx_transport(mock2),
     )
@@ -122,6 +124,7 @@ def test_double_init_replaces_previous_transport() -> None:
 def test_init_populates_global_scope_with_release_and_environment() -> None:
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         release="abc123",
         environment="staging",
         server_name="pod-7",
@@ -139,6 +142,7 @@ def test_init_falls_back_to_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ONELO_ENVIRONMENT", "production")
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         install_excepthook=False,
         http_transport=_httpx_transport(_Mock()),
     )
@@ -153,6 +157,7 @@ def test_init_falls_back_to_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_close_unsets_sink_and_uninstalls_excepthook() -> None:
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         install_excepthook=True,
         http_transport=_httpx_transport(_Mock()),
     )
@@ -181,6 +186,7 @@ def test_install_excepthook_replaces_sys_excepthook() -> None:
     original = sys.excepthook
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         install_excepthook=True,
         http_transport=_httpx_transport(_Mock()),
     )
@@ -206,6 +212,7 @@ def test_excepthook_skips_keyboard_interrupt() -> None:
     mock = _Mock()
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         install_excepthook=True,
         http_transport=_httpx_transport(mock),
     )
@@ -229,6 +236,7 @@ def test_excepthook_captures_regular_exception() -> None:
     mock = _Mock()
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         install_excepthook=True,
         http_transport=_httpx_transport(mock),
     )
@@ -253,6 +261,7 @@ def test_thread_excepthook_captures_thread_exceptions() -> None:
     mock = _Mock()
     monitor.init(
         publishable_key="k",
+        api_url="https://api.example.com",
         install_excepthook=True,
         http_transport=_httpx_transport(mock),
     )

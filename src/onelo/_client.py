@@ -78,7 +78,7 @@ class Onelo:
         *,
         publishable_key: str | None = None,
         secret_key: str | None = None,
-        api_url: str = "https://app.onelo.tools",
+        api_url: str | None = None,
         strategy: str = "auto",
         poll_interval: float = 30.0,
         request_timeout: float = 5.0,
@@ -133,6 +133,25 @@ class Onelo:
             is_secret = False
         else:
             is_secret = "_sk_" in chosen_key
+        # ── Backend URL (required — no default on purpose) ────────────
+        # There is deliberately NO default here. The backend host differs per
+        # environment (`https://api.onelo.tools` in production,
+        # `https://st.backend.onelo.tools` in staging), so any hardcoded
+        # fallback is wrong somewhere — and a wrong-but-present URL fails as a
+        # confusing network error instead of a clear config error. This matches
+        # the Node and PHP SDKs, which already require it.
+        #
+        # (This parameter previously defaulted to `https://app.onelo.tools`, a
+        # host that does not exist — so every caller relying on the default was
+        # silently pointed at nothing.)
+        if not api_url:
+            raise ValueError(
+                "Onelo requires api_url= — e.g. "
+                "Onelo(key=..., api_url='https://api.onelo.tools'). "
+                "There is no default because the backend URL differs between "
+                "production and staging; read it from your environment "
+                "(e.g. os.environ['ONELO_API_URL'])."
+            )
         # ── Explicit feature environment ──────────────────────────────
         # Decouples the feature snapshot (test|live) from the key prefix so a
         # server on a live secret key can read the Test snapshot — and a client

@@ -1,6 +1,8 @@
 # onelo-python
 
-Python SDK for [Onelo](https://app.onelo.tools) — real-time backend feature gating for FastAPI, Django, Flask, and any Python service.
+The Onelo SDK for Python backends — verify users, gate features by plan, and monitor errors. Ships adapters for FastAPI, Django, Flask, Litestar and any ASGI/WSGI app.
+
+Part of [Onelo](https://onelo.tools): hosted sign-in, a paywall on **your own Stripe** account, plan-gated feature flags, uptime monitoring, in-app feedback, a public roadmap and a waitlist.
 
 ## Install
 
@@ -26,7 +28,7 @@ Verify Onelo user tokens on your backend with a single dependency. Install with 
 `fastapi` extra:
 
 ```bash
-pip install 'onelo[fastapi] @ git+https://github.com/onelo-tools/onelo-python.git@staging' @ git+https://github.com/onelo-tools/onelo-python.git@staging'
+pip install 'onelo[fastapi] @ git+https://github.com/onelo-tools/onelo-python.git'
 ```
 
 ```python
@@ -35,7 +37,10 @@ from fastapi import FastAPI, Depends
 from onelo import Onelo
 from onelo.fastapi import RequireUser, OneloUser
 
-onelo = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])  # onelo_sk_live_…  (NEVER commit)
+onelo = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],  # onelo_sk_live_…  (NEVER commit)
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 require_user = RequireUser(onelo)
 
 app = FastAPI()
@@ -61,7 +66,10 @@ For non-FastAPI integrations (websockets, Celery), call the low-level
 ```python
 from onelo import Onelo
 
-onelo = Onelo(publishable_key="onelo_pk_live_...")
+onelo = Onelo(
+    publishable_key="onelo_pk_live_...",
+    api_url="https://api.onelo.tools",
+)
 
 # Optional: register all known features upfront so they appear in the dashboard
 onelo.features.declare(["chat-stream", "voice-stream", "game-think"])
@@ -81,7 +89,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from onelo import Onelo
 
-onelo = Onelo(publishable_key="onelo_pk_live_...")
+onelo = Onelo(
+    publishable_key="onelo_pk_live_...",
+    api_url="https://api.onelo.tools",
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -115,7 +126,10 @@ from flask import Flask
 from onelo import Onelo
 from onelo.flask import require_user, optional_user, OneloUser
 
-onelo = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])
+onelo = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 app = Flask(__name__)
 
 @app.get("/me")
@@ -154,7 +168,10 @@ import os
 from onelo import Onelo
 from onelo.django import OneloAuthenticationFactory
 
-onelo = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])  # NEVER commit
+onelo = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],  # NEVER commit
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 OneloAuthentication = OneloAuthenticationFactory(onelo)
 
 # settings.py
@@ -184,7 +201,10 @@ def me(request):
 import os
 from onelo import Onelo
 
-ONELO_CLIENT = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])
+ONELO_CLIENT = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 MIDDLEWARE = [
     ...,
     "onelo.django.OneloAuthMiddleware",
@@ -218,7 +238,10 @@ class CoreConfig(AppConfig):
 
     def ready(self):
         global onelo
-        onelo = Onelo(publishable_key="onelo_pk_live_...")
+        onelo = Onelo(
+            publishable_key="onelo_pk_live_...",
+            api_url="https://api.onelo.tools",
+        )
         onelo.ready(timeout=2.0)
 ```
 
@@ -252,7 +275,10 @@ from litestar.connection import ASGIConnection
 from onelo import Onelo
 from onelo.litestar import OneloGuardFactory
 
-onelo = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])
+onelo = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 require_user = OneloGuardFactory(onelo)
 
 @get("/me", guards=[require_user])
@@ -301,7 +327,10 @@ from fastapi import FastAPI, HTTPException, Request
 from onelo import Onelo
 from onelo.asgi import OneloAsgiMiddleware
 
-onelo = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])
+onelo = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 
 app = FastAPI()
 app.add_middleware(OneloAsgiMiddleware, onelo=onelo)
@@ -321,7 +350,10 @@ from flask import Flask, request, jsonify
 from onelo import Onelo
 from onelo.wsgi import OneloWsgiMiddleware
 
-onelo = Onelo(secret_key=os.environ["ONELO_SECRET_KEY"])
+onelo = Onelo(
+    secret_key=os.environ["ONELO_SECRET_KEY"],
+    api_url=os.environ["ONELO_API_URL"],  # https://api.onelo.tools
+)
 
 app = Flask(__name__)
 app.wsgi_app = OneloWsgiMiddleware(app.wsgi_app, onelo=onelo)
@@ -353,7 +385,7 @@ Creates an SDK instance. Spawns one background daemon thread per instance.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `publishable_key` | `str` | required | `onelo_pk_live_...` or `onelo_pk_test_...` |
-| `api_url` | `str` | `https://app.onelo.tools` | Backend URL. Use `https://st.onelo.tools` for staging. |
+| `api_url` | `str` | **required** | Backend URL — `https://api.onelo.tools` in production, `https://st.backend.onelo.tools` for staging. No default: the host differs per environment, so passing it explicitly (from your env) is the only safe option. |
 | `strategy` | `"auto" \| "sse" \| "polling"` | `"auto"` | `"auto"` resolves to `"sse"` in v1. |
 | `poll_interval` | `float` | `30.0` | Seconds between polls. Only used when `strategy="polling"`. |
 | `request_timeout` | `float` | `5.0` | HTTP request timeout in seconds. |
@@ -395,11 +427,13 @@ One background daemon thread per `Onelo` instance holds a long-lived SSE connect
 
 uvicorn/gunicorn fork workers? Each worker gets its own background thread automatically via `os.register_at_fork`. No special configuration.
 
-## Documentation
+## Links
 
-Full HTTP contract spec: `https://app.onelo.tools/api/sdk/docs`
-Onelo dashboard: `https://app.onelo.tools`
+- **Docs:** [onelo.tools/docs](https://onelo.tools/docs)
+- **Dashboard:** [onelo.tools](https://onelo.tools) — your app's snippet comes pre-filled with your keys
+- **HTTP contract spec:** `https://api.onelo.tools/api/sdk/docs`
+- **Issues:** please report them on this repository
 
 ## License
 
-MIT.
+MIT
