@@ -117,7 +117,7 @@ def test_feature_lookup_cache_miss_is_hidden():
 
 
 def test_identify_updates_user_id():
-    onelo = _make_onelo()
+    onelo = _make_onelo(publishable_key=None, secret_key="onelo_sk_test_abc")  # #520
     onelo.ready(timeout=2.0)
     try:
         onelo.identify("user-42")
@@ -131,7 +131,7 @@ def test_identify_churn_warns_once(caplog):
     """5 distinct user ids within the window → one warning, then silence."""
     import logging
 
-    onelo = _make_onelo()
+    onelo = _make_onelo(publishable_key=None, secret_key="onelo_sk_test_abc")  # #520
     onelo.ready(timeout=2.0)
     try:
         with caplog.at_level(logging.WARNING, logger="onelo"):
@@ -150,7 +150,7 @@ def test_identify_same_user_does_not_warn(caplog):
     pattern — must never trigger the churn warning."""
     import logging
 
-    onelo = _make_onelo()
+    onelo = _make_onelo(publishable_key=None, secret_key="onelo_sk_test_abc")  # #520
     onelo.ready(timeout=2.0)
     try:
         with caplog.at_level(logging.WARNING, logger="onelo"):

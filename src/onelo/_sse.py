@@ -8,8 +8,8 @@ Forward-compatible: unknown event types are ignored, so adding new event
 kinds on the backend doesn't break older SDKs.
 
 Zombie detection: a healthcheck task watches `_last_event_at`. If no event
-(including the server's `:` heartbeat comments) arrives within
-`STALE_THRESHOLD_SECONDS`, we force a reconnect. NAT/proxy idle kills
+and no `: keepalive` comment arrives within `STALE_THRESHOLD_SECONDS`, we
+force a reconnect. NAT/proxy idle kills
 silently drop the TCP connection without sending RST; without this
 watchdog the consumer would hang forever waiting for bytes that will
 never come. Mirrors Swift's `_startHealthcheck` / `_checkSSEHealth`.
@@ -20,7 +20,8 @@ import logging
 import random
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 
 import httpx
 import httpx_sse
@@ -61,6 +62,68 @@ STALE_THRESHOLD_SECONDS = 90.0
 HEALTHCHECK_INTERVAL_SECONDS = 30.0
 
 
+@dataclass(frozen=True)
+class _Event:
+    event: str
+    data: str
+
+
+# Yielded by `_aiter_frames` for every `:` comment line (the server's
+# keepalive). It carries nothing; it only proves the connection is alive.
+_COMMENT = object()
+
+
+async def _aiter_frames(response: httpx.Response) -> AsyncIterator[object]:
+    """Decode an Event Stream body into `_Event`s and `_COMMENT` markers.
+
+    Why not `httpx_sse.EventSource.aiter_sse()`: its decoder discards comment
+    lines (`if line.startswith(":"): return None` in httpx_sse 0.4.3), and the
+    server's keepalive IS a comment. A consumer that sees only decoded events
+    cannot tell a healthy idle stream from a dead one (#368).
+
+    Lines end in CRLF, LF or CR only (WHATWG HTML "event stream
+    interpretation"), so the split is done here rather than with
+    `aiter_lines()`, whose `str.splitlines()` also breaks on U+2028 and
+    friends. `id` and `retry` fields are accepted and ignored, as before.
+    """
+    content_type = response.headers.get("content-type", "").partition(";")[0]
+    if "text/event-stream" not in content_type:
+        raise httpx_sse.SSEError(
+            "Expected response header Content-Type to contain 'text/event-stream', "
+            f"got {content_type!r}"
+        )
+    pending = ""
+    event = ""
+    data: list[str] = []
+    async for text in response.aiter_text():
+        pending += text
+        while True:
+            cut = min(
+                (i for i in (pending.find("\r"), pending.find("\n")) if i != -1),
+                default=-1,
+            )
+            # A trailing CR may be the first half of a CRLF split across chunks.
+            if cut == -1 or (pending[cut] == "\r" and cut == len(pending) - 1):
+                break
+            line = pending[:cut]
+            step = 2 if pending.startswith("\r\n", cut) else 1
+            pending = pending[cut + step:]
+            if not line:
+                if data:
+                    yield _Event(event or "message", "\n".join(data))
+                event, data = "", []
+            elif line.startswith(":"):
+                yield _COMMENT
+            else:
+                field, _, value = line.partition(":")
+                if value.startswith(" "):
+                    value = value[1:]
+                if field == "event":
+                    event = value
+                elif field == "data":
+                    data.append(value)
+
+
 class SSEConsumer:
     """Async loop that holds an SSE connection and applies snapshots."""
 
@@ -83,6 +146,8 @@ class SSEConsumer:
         self._feature_environment = feature_environment
         self._cache = cache
         self._first_event = first_event
+        # Identity generation the open connection is bound to (#739).
+        self._generation: int | None = None
         self._get_user_id = get_user_id
         self._backoff = list(backoff_seconds)
         # Streaming connection: read timeout is disabled (None) because the
@@ -102,11 +167,11 @@ class SSEConsumer:
         self._on_discovery_requested = on_discovery_requested
         self._stop = asyncio.Event()
         # Set by force_reconnect() — observed by the inner consume loop so
-        # an in-flight `aiter_sse()` aborts and the outer loop reconnects
+        # an in-flight `_aiter_frames()` read aborts and the outer loop reconnects
         # immediately (no backoff). Also used by the healthcheck task.
         self._reconnect_signal = asyncio.Event()
-        # Monotonic timestamp of the last byte we saw from the server,
-        # including `:` heartbeat comments. The healthcheck task compares
+        # Monotonic timestamp of the last frame we saw from the server — an
+        # event or a `: keepalive` comment. The healthcheck task compares
         # this against STALE_THRESHOLD_SECONDS to detect zombie sockets.
         self._last_event_at: float = time.monotonic()
         self._healthcheck_task: asyncio.Task | None = None
@@ -114,7 +179,7 @@ class SSEConsumer:
     def stop(self) -> None:
         self._stop.set()
         # Wake the inner consume loop too — otherwise it stays blocked on
-        # `aiter_sse()` until the next event/heartbeat.
+        # `_aiter_frames()` until the next event/keepalive.
         self._reconnect_signal.set()
 
     def force_reconnect(self) -> None:
@@ -192,9 +257,12 @@ class SSEConsumer:
             await self._http.aclose()
 
     async def _connect_and_consume(self) -> None:
+        # #739: the connection is bound to the identity generation current
+        # when it opened; since_version is only one confirmed for it.
+        generation, since_version = self._cache.request_view()
+        self._generation = generation
         params: dict[str, str] = {
-            "key": self._key,
-            "since_version": str(self._cache.config_version),
+            "since_version": str(since_version),
             "instance_id": get_instance_id(),
             "sdk_platform": "python",
             "sdk_version": __version__,
@@ -208,17 +276,36 @@ class SSEConsumer:
             params["userId"] = user_id
 
         url = f"{self._api_url}/api/sdk/features/stream"
+        # ADR-0003: the credential travels as a request header, never in the
+        # query string. `httpx` is header-capable (unlike a browser's native
+        # EventSource, the one client that still needs `?token=`), so the raw
+        # key never reaches a reverse proxy's access.log. The backend resolves
+        # `X-Publishable-Key` when `?key=` is absent and deliberately does NOT
+        # stamp Deprecation/Sunset on such a connection — there is nothing left
+        # to deprecate. Sending both would re-arm those headers, so we send
+        # only the header.
+        #
+        # `aconnect_sse` does `headers = kwargs.pop("headers", {})` and then
+        # writes `Accept` and `Cache-Control` INTO the dict we hand it — it
+        # mutates ours, it does not merge ours into one of its own. That is why
+        # this literal must stay here, built fresh on every connect attempt:
+        # hoisting it to `__init__` and reusing one dict would let the reconnect
+        # loop accumulate the library's headers on our own state. `User-Agent`
+        # still comes from the shared client.
+        headers = {"X-Publishable-Key": self._key}
         # Reset the staleness clock on each fresh handshake — a successful
         # connect counts as "we just heard from the server".
         self._last_event_at = time.monotonic()
-        async with httpx_sse.aconnect_sse(self._http, "GET", url, params=params) as event_source:
+        async with httpx_sse.aconnect_sse(
+            self._http, "GET", url, params=params, headers=headers
+        ) as event_source:
             # A 401/403 here means the key is bad — terminal, never retry
-            # (checked before aiter_sse(), which would otherwise surface it as
+            # (checked before `_aiter_frames()`, which would otherwise surface it as
             # a generic SSEError/HTTPError that the run() loop retries forever).
             status = event_source.response.status_code
             if status in (401, 403):
                 raise _SSETerminalAuthError(status)
-            iterator = event_source.aiter_sse().__aiter__()
+            iterator = _aiter_frames(event_source.response).__aiter__()
             while True:
                 if self._stop.is_set() or self._reconnect_signal.is_set():
                     break
@@ -249,33 +336,34 @@ class SSEConsumer:
                     # underlying stream on exit.
                     break
                 try:
-                    sse_event = next_event_task.result()
+                    frame = next_event_task.result()
                 except StopAsyncIteration:
                     # Server closed the stream cleanly — outer loop will
                     # reconnect (with backoff unless a signal is set).
                     return
-                # Any byte from the server — data event OR `:` heartbeat
-                # comment that httpx_sse surfaces as an event with empty
-                # `event` field — counts as "stream is alive". This is the
-                # signal the healthcheck task watches.
+                # An event or a `: keepalive` comment — either one proves the
+                # stream is alive, which is what the healthcheck task watches.
+                # Only events go on to the handler.
                 self._last_event_at = time.monotonic()
-                self._handle_event(sse_event.event, sse_event.data)
+                if isinstance(frame, _Event):
+                    self._handle_event(frame.event, frame.data)
 
     def _handle_event(self, event_type: str, data: str) -> None:
-        if not event_type:
-            # Heartbeat / comment line. `_last_event_at` already bumped by
-            # the caller; nothing else to do.
-            return
+        generation = self._generation
+        if generation is None:
+            generation = self._cache.generation
         if event_type == "up_to_date":
-            self._first_event.set()
+            self._cache.confirm(generation, self._first_event)
             return
         if event_type in ("connected", "features_updated"):
             try:
                 payload = json.loads(data)
                 # Pass the full per-feature state dicts (status + upsell
                 # metadata) straight to the cache; it normalises and copies.
-                self._cache.replace_all(payload["features"], payload["config_version"])
-                self._first_event.set()
+                if not self._cache.apply(
+                    payload["features"], payload["config_version"], generation, self._first_event
+                ):
+                    logger.debug("%s for a previous identity dropped", event_type)
             except (ValueError, KeyError, TypeError, AttributeError) as exc:
                 logger.warning("malformed %s event: %s", event_type, exc)
             return

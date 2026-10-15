@@ -17,7 +17,7 @@ def test_full_lifecycle_with_sse(mock_backend, mock_backend_transport):
     mock_backend.config_version = 1
 
     onelo = Onelo(
-        publishable_key="onelo_pk_test_abc",
+        secret_key="onelo_sk_test_abc",  # #520: identify(user) needs the secret key
         api_url="https://example.com",
         transport=mock_backend_transport,
     )

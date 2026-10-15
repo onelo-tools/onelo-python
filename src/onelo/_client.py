@@ -20,7 +20,7 @@ import httpx
 from onelo._backend import BackendThread
 from onelo._cache import ThreadSafeCache
 from onelo._detection import resolve_strategy
-from onelo._features import Feature, FeaturesClient
+from onelo._features import Feature, FeaturesClient, require_secret_key_for_user
 from onelo._http import create_async_client
 from onelo._instance import get_instance_id
 
@@ -51,11 +51,12 @@ class Onelo:
         from contextlib import asynccontextmanager
         from onelo import Onelo
 
-        # One env var per deployment — paste a test publishable key
-        # (onelo_pk_test_*) in dev/staging or a live secret key
-        # (onelo_sk_live_*) in prod. The SDK detects which kind it is
-        # from the prefix.
-        onelo = Onelo(key=os.environ["ONELO_KEY"])
+        # A server holds your SECRET key (onelo_sk_*). The SDK detects the
+        # key kind from its prefix; `secret_key=` makes the intent explicit.
+        onelo = Onelo(
+            secret_key=os.environ["ONELO_SECRET_KEY"],
+            api_url=os.environ["ONELO_API_URL"],
+        )
 
         @asynccontextmanager
         async def lifespan(app):
@@ -70,6 +71,11 @@ class Onelo:
 
     Note: `identify()` sets a single process-global identity — see its
     docstring before calling it in a multi-user backend.
+
+    Keys: pass `secret_key=` (or `key=`). `publishable_key=` is deprecated for
+    a server: with a publishable key, auth verification refuses to run and
+    per-user Features calls (`features.for_user()`, `identify(user_id)`) raise
+    ValueError (#520). It is still accepted so existing code keeps working.
     """
 
     def __init__(
@@ -212,7 +218,7 @@ class Onelo:
             ready_callback=self._features_ready,
             # Per-user resolve (features.for_user) — stateless, multi-user-safe.
             api_url=self._api_url,
-            publishable_key=self._key,
+            key=self._key,
             request_timeout=self._request_timeout,
             transport=self._transport,
             feature_environment=self._feature_environment,
@@ -251,10 +257,25 @@ class Onelo:
         share the one identity (user A can be evaluated with user B's
         targeting) and every switch costs a reconnect. With no identity
         set, flags resolve to their global (non-targeted) state.
-        Idempotent for the same user_id."""
+        Idempotent for the same user_id.
+
+        A different id drops the previous identity's snapshot at once
+        (feature() is fail-closed/hidden meanwhile) and re-arms ready():
+        call `onelo.ready()` after identify() before gating on features.
+
+        Raises ValueError for a non-None user_id when the client holds a
+        publishable key: a per-user call must be signed with the secret key
+        (#520). identify(None) (back to anonymous) always works."""
+        if user_id is not None:
+            require_secret_key_for_user(self._key, "onelo.identify(user_id)")
         with self._user_id_lock:
-            switched = user_id != self._user_id and user_id is not None
+            changed = user_id != self._user_id
+            switched = changed and user_id is not None
             self._user_id = user_id
+            if changed:
+                # #739: the previous identity's snapshot, confirmed
+                # config_version and ready state must not carry over.
+                self._cache.begin_identity(self._backend.first_event)
             if switched and not self._identify_churn_warned:
                 now = time.monotonic()
                 self._identify_switches.append(now)
@@ -470,7 +491,7 @@ class Onelo:
             ready_callback=self._features_ready,
             # Per-user resolve (features.for_user) — stateless, multi-user-safe.
             api_url=self._api_url,
-            publishable_key=self._key,
+            key=self._key,
             request_timeout=self._request_timeout,
             transport=self._transport,
             # Must survive fork: a preload+fork server (gunicorn/uwsgi) that set

@@ -22,7 +22,13 @@ async def test_polling_updates_cache_on_200():
         # but would break a strict equality assertion.
         if call_count["n"] == 1:
             assert request.url.path == "/api/sdk/features/poll"
-            assert request.url.params.get("key") == "pk_test"
+            # ADR-0003 / #105: the credential is a request header, and it is
+            # NOT ALSO in the query string -- the backend resolves `?key=`
+            # first, so sending both would re-arm Deprecation/Sunset and keep
+            # writing the key to the reverse proxy's access.log every tick.
+            assert request.headers.get("X-Publishable-Key") == "pk_test"
+            assert "key" not in request.url.params
+            assert "pk_test" not in str(request.url)
             assert request.url.params.get("since_version") == "0"
         return httpx.Response(200, json={
             "config_version": 7,

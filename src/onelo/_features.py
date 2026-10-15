@@ -46,6 +46,25 @@ _GATED_STATUSES = frozenset({"upsell", "greyed"})
 _USER_SNAPSHOT_MAX_ENTRIES = 10_000
 
 
+def require_secret_key_for_user(key: str, call: str) -> None:
+    """#520: a per-user Features call from a server must be signed with the
+    SECRET key. The backend trusts a caller-supplied user id only from a
+    secret-key caller, classifying the key by its `onelo_sk_` prefix exactly as
+    here. A publishable key is public — anyone can copy it and name any user —
+    so the call is refused before it is sent. Anonymous/global calls with a
+    publishable key are unaffected."""
+    if key.startswith("onelo_sk_"):
+        return
+    raise ValueError(
+        f"{call} needs the secret key: per-user Features calls from a server are "
+        "trusted only when signed with a secret key, and this client was "
+        "configured with a publishable key (onelo_pk_…) — use your secret key "
+        "(onelo_sk_…) on the server: Onelo(secret_key=os.environ['ONELO_SECRET_KEY'], "
+        "api_url=...). Anonymous calls (feature(), declare()) keep working with a "
+        "publishable key."
+    )
+
+
 @dataclass(frozen=True)
 class Feature:
     """A single feature's resolved state. Returned by FeaturesClient.feature().
@@ -272,11 +291,14 @@ class FeaturesClient:
         ready_callback: Callable[[float], bool] | None = None,
         *,
         api_url: str = "",
-        publishable_key: str = "",
+        key: str = "",
         request_timeout: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
         feature_environment: str | None = None,
+        publishable_key: str = "",
     ) -> None:
+        # `key` is the client's key, sent as the `publishableKey` wire field.
+        # `publishable_key` is the deprecated earlier name, still accepted.
         self._cache = cache
         self._schedule_batch_ping = schedule_batch_ping_callback
         self._ready = ready_callback
@@ -284,7 +306,7 @@ class FeaturesClient:
         # Per-user resolve (for_user) — stateless, multi-user-safe. Reuses the
         # same /resolve endpoint and security context as the global poll path.
         self._api_url = api_url.rstrip("/")
-        self._publishable_key = publishable_key
+        self._key = key or publishable_key
         self._request_timeout = request_timeout
         self._transport = transport
         # Explicit env (test|live) forwarded on /resolve so for_user reads the
@@ -380,10 +402,13 @@ class FeaturesClient:
 
         Fail-closed: on a network/HTTP error every feature resolves to hidden
         (empty snapshot) — gating stays safe and the call never raises for an
-        infra blip. Raises ValueError only for an empty user_id (a programmer
-        error, never a runtime condition)."""
+        infra blip. Raises ValueError only for a programmer/config error, never
+        a runtime condition: an empty user_id, or a client configured with a
+        publishable key — a per-user call must be signed with the secret key
+        (#520)."""
         if not user_id:
             raise ValueError("for_user requires a non-empty user_id")
+        require_secret_key_for_user(self._key, "onelo.features.for_user()")
         snapshot = self._user_cache.get(user_id)
         if snapshot is None:
             snapshot = await self._resolve_user(user_id)
@@ -397,12 +422,12 @@ class FeaturesClient:
         the poll consumer's request (key + userId, standard headers) so it
         passes the same SDK security check. Returns {} (→ every feature hidden)
         on any failure — never raises for infra errors."""
-        if not self._api_url or not self._publishable_key:
-            logger.warning("for_user: SDK missing api_url/publishable_key — resolving empty")
+        if not self._api_url or not self._key:
+            logger.warning("for_user: SDK missing api_url/key — resolving empty")
             return {}
         client = create_async_client(timeout=self._request_timeout, transport=self._transport)
         body: dict = {
-            "publishableKey": self._publishable_key,
+            "publishableKey": self._key,
             "userId": user_id,
             "sdk_platform": "python",
             "sdk_version": __version__,

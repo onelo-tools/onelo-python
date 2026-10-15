@@ -45,28 +45,45 @@ class PollingConsumer:
         self._on_discovery_requested = on_discovery_requested
         self._http = create_async_client(timeout=request_timeout, transport=transport)
         self._stop = asyncio.Event()
+        # #739: set by poll_now() (identity change) to skip the interval wait.
+        self._wake = asyncio.Event()
+
+    def poll_now(self) -> None:
+        """Poll immediately (identity changed). Call on the consumer's loop."""
+        self._wake.set()
 
     def stop(self) -> None:
         """Signal the loop to exit. Safe to call from any thread."""
         # asyncio.Event.set is safe across threads in CPython 3.10+ when the
         # loop hosting the event is running. The backend thread owns this loop.
         self._stop.set()
+        self._wake.set()
 
     async def run(self) -> None:
         try:
             while not self._stop.is_set():
                 await self._poll_once()
                 try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
+                    await asyncio.wait_for(self._wake.wait(), timeout=self._interval)
                 except asyncio.TimeoutError:
                     pass  # interval elapsed, loop again
+                self._wake.clear()
         finally:
             await self._http.aclose()
 
     async def _poll_once(self) -> None:
+        # The key is NOT in the query string -- it travels as the
+        # `X-Publishable-Key` request header (ADR-0003, #105), exactly as
+        # _sse.py sends it on the stream. /poll fires on a timer, so a raw key
+        # in the URL landed in the reverse proxy's access.log on every tick;
+        # from 2027-03-31 the backend refuses `?key=` outright. Sending both
+        # would re-arm Deprecation/Sunset, because the backend resolves
+        # `?key=` first.
+        # #739: generation and since_version are read together; the version
+        # is only ever one confirmed for the current identity.
+        generation, since_version = self._cache.request_view()
         params: dict[str, str] = {
-            "key": self._key,
-            "since_version": str(self._cache.config_version),
+            "since_version": str(since_version),
         }
         if self._feature_environment is not None:
             params["environment"] = self._feature_environment
@@ -75,14 +92,19 @@ class PollingConsumer:
             params["userId"] = user_id
 
         try:
-            resp = await self._http.get(f"{self._api_url}/api/sdk/features/poll", params=params)
+            resp = await self._http.get(
+                f"{self._api_url}/api/sdk/features/poll",
+                params=params,
+                headers={"X-Publishable-Key": self._key},
+            )
         except httpx.HTTPError as exc:
             logger.debug("poll request failed: %s", exc)
             return  # try again next interval
 
-        # 304 = cache up-to-date; still counts as first contact for ready()
-        if resp.status_code in (200, 304):
-            self._first_event.set()
+        # 304 = cache up-to-date; counts as first contact for ready() — but
+        # only for the identity this request was made for (#739).
+        if resp.status_code == 304:
+            self._cache.confirm(generation, self._first_event)
 
         if resp.status_code == 200:
             try:
@@ -101,12 +123,17 @@ class PollingConsumer:
             # with NO `features` payload (sdk_features_sse.py). The cache is
             # already current — treat it as a no-op, not a malformed response.
             if data.get("up_to_date") or "features" not in data:
+                self._cache.confirm(generation, self._first_event)
                 self._maybe_request_discovery(data)
                 return
             try:
                 # Keep the full per-feature state dicts (status + upsell
                 # metadata); the cache normalises and copies each value.
-                self._cache.replace_all(data["features"], data["config_version"])
+                if not self._cache.apply(
+                    data["features"], data["config_version"], generation, self._first_event
+                ):
+                    logger.debug("poll result for a previous identity dropped")
+                    return
             except (KeyError, TypeError, AttributeError) as exc:
                 logger.warning("poll response malformed: %s", exc)
                 return

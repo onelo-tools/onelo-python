@@ -1,6 +1,7 @@
 """Tests for monitor.init / close / flush — the public entry points."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -82,8 +83,8 @@ def test_init_pulls_config_from_existing_onelo_client() -> None:
         assert len(mock.calls) == 1
         # URL came from the Onelo client, not from the kw default.
         assert "different.example.com" in str(mock.calls[0].url)
-        body = mock.calls[0].read()
-        assert b"onelo_pk_test_from_client" in body
+        payload = json.loads(mock.calls[0].read())
+        assert payload["publishableKey"] == "onelo_pk_test_from_client"
     finally:
         onelo.close()
 
@@ -207,7 +208,6 @@ def test_excepthook_skips_keyboard_interrupt() -> None:
     so the mock DOES see one POST containing that event — the assertion below
     checks no *additional* (KeyboardInterrupt-triggered) event rode along.
     """
-    import json
 
     mock = _Mock()
     monitor.init(
@@ -249,9 +249,11 @@ def test_excepthook_captures_regular_exception() -> None:
     finally:
         monitor.close()
     assert len(mock.calls) == 1
-    body = mock.calls[0].read()
-    assert b'"featureName":"uncaught"' in body
-    assert b"ValueError" in body
+    payload = json.loads(mock.calls[0].read())
+    uncaught = [e for e in payload["events"] if e["featureName"] == "uncaught"]
+    assert len(uncaught) == 1
+    assert uncaught[0]["ok"] is False
+    assert uncaught[0]["meta"]["exception"]["type"] == "ValueError"
 
 
 # ── thread excepthook ──────────────────────────────────────────────────────
@@ -278,14 +280,19 @@ def test_thread_excepthook_captures_thread_exceptions() -> None:
         monitor.close()
 
     # threading.excepthook fires on the joined thread's exception.
-    assert any(b"thread boom" in c.read() for c in mock.calls)
+    events = [e for c in mock.calls for e in json.loads(c.read())["events"]]
+    thread_events = [e for e in events if e["featureName"] == "thread_uncaught"]
+    assert len(thread_events) == 1
+    assert thread_events[0]["ok"] is False
+    exception = thread_events[0]["meta"]["exception"]
+    assert exception["type"] == "RuntimeError"
+    assert exception["message"] == "thread boom"
 
 
 def test_deploy_context_stamped_on_backend_read_meta_paths() -> None:
     """release/environment must land on meta.app.version + meta.environment —
     the exact paths the backend aggregates on (M2). The scope-tag copies under
     meta.tags.* are ignored by the dashboard's Release/Environment filters."""
-    import json
 
     mock = _Mock()
     monitor.init(

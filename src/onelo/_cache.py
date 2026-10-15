@@ -17,6 +17,12 @@ class ThreadSafeCache:
         self._lock = threading.RLock()
         self._features: dict[str, dict] = {}
         self._config_version: int = 0
+        # #739: identity generation. Bumped by begin_identity() whenever the
+        # process-global identity changes; a stream/poll result is applied
+        # (and ready signalled) only for the generation current when its
+        # request started, so a late answer for the previous identity can
+        # never land on — or mark ready — the new one.
+        self._generation: int = 0
 
     @staticmethod
     def _normalize(value: object) -> dict:
@@ -50,6 +56,49 @@ class ThreadSafeCache:
         with self._lock:
             self._features = {k: self._normalize(v) for k, v in features.items()}
             self._config_version = version
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def request_view(self) -> tuple[int, int]:
+        """(generation, since_version) read atomically at request start. The
+        version is non-zero only once a snapshot was CONFIRMED for this
+        generation (begin_identity resets it to 0)."""
+        with self._lock:
+            return self._generation, self._config_version
+
+    def begin_identity(self, ready=None) -> None:
+        """New identity: drop the previous identity's snapshot (fail-closed),
+        forget its config_version so the next request asks for a full
+        snapshot, and re-arm `ready` — all under the cache lock."""
+        with self._lock:
+            self._generation += 1
+            self._features = {}
+            self._config_version = 0
+            if ready is not None:
+                ready.clear()
+
+    def apply(self, features: dict, version: int, generation: int, ready=None) -> bool:
+        """replace_all() bound to `generation`: a no-op returning False when the
+        identity changed since the request started. Sets `ready` on success."""
+        with self._lock:
+            if generation != self._generation:
+                return False
+            self.replace_all(features, version)
+            if ready is not None:
+                ready.set()
+            return True
+
+    def confirm(self, generation: int, ready) -> bool:
+        """Signal `ready` for an up-to-date answer, only for the current
+        generation."""
+        with self._lock:
+            if generation != self._generation:
+                return False
+            ready.set()
+            return True
 
     @property
     def config_version(self) -> int:

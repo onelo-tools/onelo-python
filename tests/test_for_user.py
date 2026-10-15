@@ -18,7 +18,7 @@ def _client(handler) -> FeaturesClient:
         cache=ThreadSafeCache(),
         schedule_batch_ping_callback=lambda: None,
         api_url="https://example.com",
-        publishable_key="onelo_pk_live_x",
+        key="onelo_sk_live_x",
         transport=httpx.MockTransport(handler),
     )
 
@@ -28,7 +28,7 @@ def test_for_user_resolves_per_user_snapshot():
         assert request.url.path == "/api/sdk/features/resolve"
         payload = json.loads(request.content)
         assert payload["userId"] == "alice"
-        assert payload["publishableKey"] == "onelo_pk_live_x"
+        assert payload["publishableKey"] == "onelo_sk_live_x"
         return httpx.Response(200, json={
             "features": {
                 "face-stream": {"status": "enabled"},
@@ -98,7 +98,7 @@ def test_for_user_does_not_touch_global_identity():
         cache=cache,
         schedule_batch_ping_callback=lambda: None,
         api_url="https://example.com",
-        publishable_key="onelo_pk_live_x",
+        key="onelo_sk_live_x",
         transport=httpx.MockTransport(handler),
     )
     asyncio.run(fc.for_user("alice"))

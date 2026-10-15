@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 
@@ -62,10 +63,11 @@ def test_send_buffers_event_and_flush_pushes_batch() -> None:
         t.stop()
 
     assert len(mock.calls) == 1
-    body = mock.calls[0].read()
-    assert b"feature-0" in body
-    assert b"feature-4" in body
-    assert b'"publishableKey":"k"' in body
+    payload = json.loads(mock.calls[0].read())
+    assert payload["publishableKey"] == "k"
+    assert [e["featureName"] for e in payload["events"]] == [
+        f"feature-{i}" for i in range(5)
+    ]
 
 
 def test_error_event_triggers_immediate_flush() -> None:
@@ -319,9 +321,10 @@ def test_reinit_after_fork_rebuilds_thread_and_delivers() -> None:
         t.stop()
 
     assert len(mock.calls) == 1
-    body = mock.calls[0].read()
-    assert b"after-fork" in body
-    assert b"parent-startup" not in body
+    payload = json.loads(mock.calls[0].read())
+    names = [e["featureName"] for e in payload["events"]]
+    assert "after-fork" in names
+    assert "parent-startup" not in names
 
 
 # ── M5: quota self-throttle ─────────────────────────────────────────────────

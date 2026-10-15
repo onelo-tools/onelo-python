@@ -54,6 +54,10 @@ async def me(user: OneloUser = Depends(require_user)):
 on 5xx, and maps failures to the right HTTP status (`401` invalid, `403` gate,
 `503` upstream down). Optional knobs: `accept_query_token`, `require_email_verified`,
 `require_plan=["pro"]`, custom `cache`, `on_auth_event` for audit logging.
+`require_email_verified` refuses users who have not verified their address; turn
+Email verification on (Optional or Required) in the parent App's Auth → Sign-up,
+or every password user stays unverified. OAuth, Magic Link and e-mailed password
+resets count as verified.
 
 For routes where auth is optional, swap in `OptionalUser` — it returns `None`
 on missing/invalid tokens but still surfaces 503 if Onelo is unreachable.
@@ -64,18 +68,21 @@ For non-FastAPI integrations (websockets, Celery), call the low-level
 ## Quickstart
 
 ```python
+import os
 from onelo import Onelo
 
 onelo = Onelo(
-    publishable_key="onelo_pk_live_...",
+    secret_key=os.environ["ONELO_SECRET_KEY"],  # onelo_sk_live_…  (NEVER commit)
     api_url="https://api.onelo.tools",
 )
 
 # Optional: register all known features upfront so they appear in the dashboard
 onelo.features.declare(["chat-stream", "voice-stream", "game-think"])
 
-# Optional: identify the current user for per-user targeting
+# Optional (single-user processes only, e.g. a CLI or worker): identify the
+# user for per-user targeting. Requires the secret key — see below.
 onelo.identify("user-123")
+onelo.ready(timeout=2.0)  # wait for THIS user's snapshot before gating
 
 # Sync feature check — no `await` needed
 if onelo.features.feature("chat-stream").is_enabled:
@@ -86,11 +93,12 @@ if onelo.features.feature("chat-stream").is_enabled:
 
 ```python
 from contextlib import asynccontextmanager
+import os
 from fastapi import FastAPI, Depends, HTTPException
 from onelo import Onelo
 
 onelo = Onelo(
-    publishable_key="onelo_pk_live_...",
+    secret_key=os.environ["ONELO_SECRET_KEY"],  # onelo_sk_live_…  (NEVER commit)
     api_url="https://api.onelo.tools",
 )
 
@@ -104,12 +112,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/chat/stream")
-async def chat_stream(user = Depends(current_user)):
-    onelo.identify(user.id)
+async def chat_stream():
     if not onelo.features.feature("chat-stream").is_enabled:
         raise HTTPException(404, "Feature not available")
     return ...
 ```
+
+Per-user or per-plan gating resolves for the Onelo Auth user the request
+verified — `user: OneloUser = Depends(RequireUser(onelo))` from `onelo.fastapi`
+— with `uf = await onelo.features.for_user(user.id)`. Onelo requires Onelo
+Auth, and never call the process-global `identify()` per request — concurrent
+requests would race.
 
 ## Flask integration
 
@@ -228,6 +241,7 @@ gate that returns `401` / `403` / `503` JSON responses.
 In your `apps.py`:
 
 ```python
+import os
 from django.apps import AppConfig
 from onelo import Onelo
 
@@ -239,7 +253,7 @@ class CoreConfig(AppConfig):
     def ready(self):
         global onelo
         onelo = Onelo(
-            publishable_key="onelo_pk_live_...",
+            secret_key=os.environ["ONELO_SECRET_KEY"],
             api_url="https://api.onelo.tools",
         )
         onelo.ready(timeout=2.0)
@@ -251,11 +265,16 @@ In your views:
 from .apps import onelo
 
 def chat_view(request):
-    onelo.identify(str(request.user.id))
     if not onelo.features.feature("chat-stream").is_enabled:
         return HttpResponseNotFound()
     return ...
 ```
+
+Per-user or per-plan gating needs an async view, because `for_user()` is
+async: `uf = await onelo.features.for_user(request.onelo_user.id)`, with the
+Onelo Auth user that `OneloAuthMiddleware` puts on `request.onelo_user`. Onelo
+requires Onelo Auth, and never call the process-global `identify()` per
+request — concurrent requests would race.
 
 ## Litestar integration
 
@@ -378,13 +397,14 @@ For framework-idiomatic auth with proper 401/403/503 mapping, prefer
 
 ## API reference
 
-### `Onelo(publishable_key, api_url=..., strategy="auto", poll_interval=30, request_timeout=5, log_level=None)`
+### `Onelo(secret_key=..., api_url=..., strategy="auto", poll_interval=30, request_timeout=5, log_level=None)`
 
 Creates an SDK instance. Spawns one background daemon thread per instance.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `publishable_key` | `str` | required | `onelo_pk_live_...` or `onelo_pk_test_...` |
+| `secret_key` | `str` | one key required | Your server secret key, `onelo_sk_live_…` / `onelo_sk_test_…`. Required for auth verification and for per-user Features calls. `key=` is also accepted (kind detected from the prefix). |
+| `publishable_key` | `str` | — | **Deprecated for servers.** Still accepted, but with a publishable key auth verification refuses to run and per-user Features calls raise `ValueError`. Anonymous `feature()` / `declare()` keep working. |
 | `api_url` | `str` | **required** | Backend URL — `https://api.onelo.tools` in production, `https://st.backend.onelo.tools` for staging. No default: the host differs per environment, so passing it explicitly (from your env) is the only safe option. |
 | `strategy` | `"auto" \| "sse" \| "polling"` | `"auto"` | `"auto"` resolves to `"sse"` in v1. |
 | `poll_interval` | `float` | `30.0` | Seconds between polls. Only used when `strategy="polling"`. |
@@ -393,7 +413,23 @@ Creates an SDK instance. Spawns one background daemon thread per instance.
 
 ### `onelo.identify(user_id)`
 
-Set the user_id for per-user feature targeting. Sync, idempotent.
+Set the process-global user_id for per-user feature targeting. Sync,
+idempotent. For single-user processes only; a multi-user backend uses
+`await onelo.features.for_user(user_id)`.
+
+Changing the identity drops the previous identity's snapshot at once
+(`feature()` answers hidden meanwhile), re-arms `ready()` and fetches the new
+identity's full snapshot. Call `onelo.ready()` after `identify()` before gating
+on features. A late answer for the previous identity is discarded.
+
+### Per-user calls require the secret key
+
+`features.for_user(user_id)` and `identify(user_id)` send a user id the backend
+trusts only from a **secret-key** caller. A publishable key is public, so a
+client configured with one raises `ValueError` on these calls ("use your secret
+key (onelo_sk_…) on the server") instead of sending a spoofable request.
+Anonymous calls (`feature()`, `declare()`, `ready()`, `identify(None)`) work
+with either key.
 
 ### `onelo.features.feature(name) -> Feature`
 
@@ -405,7 +441,7 @@ Send a batch-ping to register the listed feature names so they appear in the das
 
 ### `onelo.ready(timeout=1.5) -> bool`
 
-Block until the first SSE event (or polling response) is received. Returns `True` if event received within timeout, `False` otherwise.
+Block until the first SSE event (or polling response) for the current identity is received. Returns `True` if event received within timeout, `False` otherwise. `identify()` with a different id re-arms it.
 
 ### `onelo.close()`
 
@@ -426,6 +462,25 @@ Read-only value object with these properties:
 One background daemon thread per `Onelo` instance holds a long-lived SSE connection to the backend. Updates land in a thread-safe in-memory cache. User code reads from the cache synchronously (~1µs) — never blocks on the network.
 
 uvicorn/gunicorn fork workers? Each worker gets its own background thread automatically via `os.register_at_fork`. No special configuration.
+
+## Development
+
+The SDK has its own test environment — do **not** run its suite from
+`backend/venv` (that venv carries a stale, non-editable `onelo` in
+`site-packages` which shadows `src/`, and pins httpx to the floor of the range
+this package supports):
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -c "import onelo, httpx; print(onelo.__file__, httpx.__version__)"
+.venv/bin/python -m pytest -q
+```
+
+`httpx>=0.27,<1.0` is tested at **both** ends of that range in CI
+(`.github/workflows/ci.yml`, job `onelo-python`). Widening the range means
+adding the new point to that matrix — see
+[ADR-0006](../../docs/adr/0006-onelo-python-tests-its-own-declared-httpx-range.md).
 
 ## Links
 

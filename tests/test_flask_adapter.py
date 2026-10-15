@@ -200,6 +200,21 @@ def test_require_email_verified_gate_returns_403():
         client.close()
 
 
+def test_require_email_verified_passes_a_verified_user():
+    # #819: /api/sdk/auth/user reports email_verified at the top level; before
+    # that the option refused everyone.
+    payload = dict(SAMPLE_PAYLOAD, email_verified=True, allowed_in=True, entitlement="none")
+    transport = AuthTransport([(200, payload)])
+    client = _make_secret_client(transport)
+    try:
+        app = _make_app(require_user(client, require_email_verified=True))
+        with app.test_client() as c:
+            r = c.get("/me", headers={"Authorization": "Bearer t"})
+        assert r.status_code == 200
+    finally:
+        client.close()
+
+
 def test_require_plan_gate_returns_403():
     payload = dict(SAMPLE_PAYLOAD, plan="free")
     transport = AuthTransport([(200, payload)])

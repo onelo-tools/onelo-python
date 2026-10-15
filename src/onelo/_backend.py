@@ -121,14 +121,20 @@ class BackendThread:
         link and means the very first `feature()` after `identify()` may
         return the wrong tenant's state.
 
-        For polling: no-op — the next poll cycle reads `get_user_id()`
-        directly so the new id is picked up naturally within `poll_interval`.
+        For polling: wake the loop so the new identity is polled at once
+        (#739) instead of after `poll_interval`.
         """
         if self._consumer is None or self._loop is None:
             return
         if isinstance(self._consumer, SSEConsumer):
             try:
                 self._loop.call_soon_threadsafe(self._consumer.force_reconnect)
+            except RuntimeError:
+                pass  # loop already closed
+        else:
+            # #739: poll the new identity now instead of after poll_interval.
+            try:
+                self._loop.call_soon_threadsafe(self._consumer.poll_now)
             except RuntimeError:
                 pass  # loop already closed
 
