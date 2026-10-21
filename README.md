@@ -1,5 +1,7 @@
 # onelo-python
 
+![Tests](https://github.com/onelo-tools/onelo-python/actions/workflows/tests.yml/badge.svg)
+
 The Onelo SDK for Python backends — verify users, gate features by plan, and monitor errors. Ships adapters for FastAPI, Django, Flask, Litestar and any ASGI/WSGI app.
 
 Part of [Onelo](https://onelo.tools): hosted sign-in, a paywall on **your own Stripe** account, plan-gated feature flags, uptime monitoring, in-app feedback, a public roadmap and a waitlist.
