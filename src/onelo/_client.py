@@ -20,6 +20,7 @@ import httpx
 from onelo._backend import BackendThread
 from onelo._cache import ThreadSafeCache
 from onelo._detection import resolve_strategy
+from onelo._store import StoreClient
 from onelo._features import Feature, FeaturesClient, require_secret_key_for_user
 from onelo._http import create_async_client
 from onelo._instance import get_instance_id
@@ -222,6 +223,13 @@ class Onelo:
             request_timeout=self._request_timeout,
             transport=self._transport,
             feature_environment=self._feature_environment,
+        )
+        # Store module (#909) — stateless; one HTTP client per call.
+        self.store = StoreClient(
+            api_url=self._api_url,
+            key=self._key,
+            request_timeout=self._request_timeout,
+            transport=self._transport,
         )
         # ── Background thread ─────────────────────────────────────────
         self._backend = BackendThread(

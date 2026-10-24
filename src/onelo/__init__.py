@@ -1,6 +1,7 @@
 """Onelo SDK for Python — backend feature gating with real-time updates."""
 from onelo._client import Onelo
 from onelo._features import Feature
+from onelo._store import OneloPlan, OneloStoreError
 from onelo._version import __version__
 from onelo.auth import (
     OneloAuthError,
@@ -17,6 +18,8 @@ from onelo.auth import (
 __all__ = [
     "Onelo",
     "Feature",
+    "OneloPlan",
+    "OneloStoreError",
     "__version__",
     "OneloUser",
     "OneloAuthError",

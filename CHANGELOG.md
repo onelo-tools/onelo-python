@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0a1] — 2026-10-22
+
+### Added
+
+- **`onelo.store.list_plans()`** (#909). Returns the App's active plans as `OneloPlan` (plan key, name, short label, mode, currency, `price_amount` and `annual_price_amount` in minor units, trial days, sort order) from `GET /api/sdk/store/plans`. `plan` is the same key as `OneloUser.plan`. Secret key only: a publishable-key client raises `ValueError` before sending; a refused or failed request raises `OneloStoreError`.
+
 ## [0.6.0a4] — 2026-10-07
 
 ### Fixed

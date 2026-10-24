@@ -1,7 +1,5 @@
 # onelo-python
 
-![Tests](https://github.com/onelo-tools/onelo-python/actions/workflows/tests.yml/badge.svg)
-
 The Onelo SDK for Python backends — verify users, gate features by plan, and monitor errors. Ships adapters for FastAPI, Django, Flask, Litestar and any ASGI/WSGI app.
 
 Part of [Onelo](https://onelo.tools): hosted sign-in, a paywall on **your own Stripe** account, plan-gated feature flags, uptime monitoring, in-app feedback, a public roadmap and a waitlist.
@@ -444,6 +442,15 @@ Send a batch-ping to register the listed feature names so they appear in the das
 ### `onelo.ready(timeout=1.5) -> bool`
 
 Block until the first SSE event (or polling response) for the current identity is received. Returns `True` if event received within timeout, `False` otherwise. `identify()` with a different id re-arms it.
+
+### `await onelo.store.list_plans() -> list[OneloPlan]`
+
+The App's active plans with prices (secret key only), ordered by sort order. `plan` is the same key as `OneloUser.plan`; `price_amount` and `annual_price_amount` are in minor units. Raises `OneloStoreError` (with `.status`) when the request is refused or fails.
+
+```python
+plans = await onelo.store.list_plans()
+# [OneloPlan(plan='pro', name='Pro', mode='subscription', currency='eur', price_amount=1900, ...)]
+```
 
 ### `onelo.close()`
 
