@@ -31,6 +31,33 @@ def test_list_plans_sends_secret_key_and_maps():
     )]
 
 
+def test_988_maps_what_a_buyer_pays_and_sends_the_country():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("country") == "PL"
+        return httpx.Response(200, json={"plans": [{
+            "plan": "pro", "name": "Pro", "short_label": None, "mode": "subscription",
+            "currency": "pln", "price_amount": 4900, "annual_price_amount": 49000,
+            "trial_period_days": None, "is_active": True, "sort_order": 1,
+            "tax_behavior": "exclusive", "display_price_amount": 6027,
+            "display_annual_price_amount": 60270, "display_tax_country": "PL",
+        }]})
+
+    [plan] = asyncio.run(_client(handler).list_plans(country="PL"))
+    assert plan.price_amount == 4900
+    assert plan.tax_behavior == "exclusive"
+    assert plan.display_price_amount == 6027
+    assert plan.display_annual_price_amount == 60270
+    assert plan.display_tax_country == "PL"
+
+
+def test_no_country_sends_no_query():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert "country" not in request.url.params
+        return httpx.Response(200, json={"plans": []})
+
+    assert asyncio.run(_client(handler).list_plans()) == []
+
+
 def test_publishable_key_refused_before_request():
     def handler(request):  # pragma: no cover - must not be called
         raise AssertionError("no request expected")

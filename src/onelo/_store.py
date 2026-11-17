@@ -32,6 +32,14 @@ class OneloPlan:
     trial_period_days: Optional[int]
     is_active: bool
     sort_order: int
+    #: ``"exclusive"``: ``price_amount`` is a net price and VAT is added on top.
+    tax_behavior: Optional[str] = None
+    #: What a consumer is shown and charged — the price with VAT at the
+    #: standard rate of ``display_tax_country`` when it is net; the price itself
+    #: when it already includes VAT. Show this one to buyers.
+    display_price_amount: Optional[int] = None
+    display_annual_price_amount: Optional[int] = None
+    display_tax_country: Optional[str] = None
 
     @classmethod
     def from_dict(cls, p: dict[str, Any]) -> "OneloPlan":
@@ -46,6 +54,10 @@ class OneloPlan:
             trial_period_days=p.get("trial_period_days"),
             is_active=bool(p.get("is_active")),
             sort_order=p["sort_order"],
+            tax_behavior=p.get("tax_behavior"),
+            display_price_amount=p.get("display_price_amount"),
+            display_annual_price_amount=p.get("display_annual_price_amount"),
+            display_tax_country=p.get("display_tax_country"),
         )
 
 
@@ -71,8 +83,12 @@ class StoreClient:
         self._request_timeout = request_timeout
         self._transport = transport
 
-    async def list_plans(self) -> list[OneloPlan]:
-        """The App's active plans, ordered by sort order. Requires the secret key."""
+    async def list_plans(self, *, country: Optional[str] = None) -> list[OneloPlan]:
+        """The App's active plans, ordered by sort order. Requires the secret key.
+
+        ``country`` (ISO 3166-1 alpha-2, e.g. ``"DE"``) prices the ``display_*``
+        amounts for a buyer there, when the seller charges the buyer's own VAT.
+        """
         if not self._key.startswith("onelo_sk_"):
             raise ValueError(
                 "onelo.store.list_plans() needs the secret key (onelo_sk_…) — call it from your server."
@@ -84,6 +100,7 @@ class StoreClient:
                 res = await client.get(
                     f"{self._api_url}/api/sdk/store/plans",
                     headers={"X-Onelo-Secret-Key": self._key},
+                    params={"country": country} if country else None,
                 )
         except httpx.HTTPError as exc:
             raise OneloStoreError(f"network error: {exc}") from exc

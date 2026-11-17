@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0a1] — 2026-11-07
+
+### Added
+
+- **`OneloPlan` carries what a buyer pays** (#988). New fields `tax_behavior`, `display_price_amount`, `display_annual_price_amount` and `display_tax_country`. For a net-priced plan (`tax_behavior == "exclusive"`) `price_amount` stays the configured net and `display_price_amount` adds VAT at the standard rate of `display_tax_country`; for a gross plan they are equal. `list_plans(country="DE")` prices the display amounts for a buyer's country when the seller charges the buyer's own VAT (OSS).
+
 ## [0.7.0a1] — 2026-10-22
 
 ### Added

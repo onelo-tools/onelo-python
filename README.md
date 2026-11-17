@@ -443,9 +443,11 @@ Send a batch-ping to register the listed feature names so they appear in the das
 
 Block until the first SSE event (or polling response) for the current identity is received. Returns `True` if event received within timeout, `False` otherwise. `identify()` with a different id re-arms it.
 
-### `await onelo.store.list_plans() -> list[OneloPlan]`
+### `await onelo.store.list_plans(country=None) -> list[OneloPlan]`
 
 The App's active plans with prices (secret key only), ordered by sort order. `plan` is the same key as `OneloUser.plan`; `price_amount` and `annual_price_amount` are in minor units. Raises `OneloStoreError` (with `.status`) when the request is refused or fails.
+
+Show buyers `display_price_amount` (and `display_annual_price_amount`): it is what they pay. For a net-priced plan (`tax_behavior == "exclusive"`) `price_amount` is the net and the display amount adds VAT at the standard rate of `display_tax_country`. Pass `country="DE"` to price for a buyer's country when you sell under OSS.
 
 ```python
 plans = await onelo.store.list_plans()
